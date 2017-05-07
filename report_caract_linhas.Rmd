@@ -1,7 +1,7 @@
 ---
 layout: blog
 title: "Caracterização das linhas de ônibus do município de São Paulo"
-status: process
+status: processed
 ---
 
 ```{r setup, include=FALSE, warning=FALSE, results='markup', encoding = "UTF-8"}
