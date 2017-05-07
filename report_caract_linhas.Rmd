@@ -1,0 +1,457 @@
+---
+layout: blog
+title: "Caracterização das linhas de ônibus do município de São Paulo"
+status: process
+---
+
+```{r setup, include=FALSE, warning=FALSE, results='markup', encoding = "UTF-8"}
+knitr::opts_chunk$set(echo = TRUE)
+options(scipen = 999)
+```
+
+# Introdução  
+
+A pesquisa ***Acesso ao transporte público e desigualdades espaciais na cidade de São Paulo*** visa explorar a rede municipal de linhas de ônibus para investigar as relações entre o transporte público e a reprodução de desigualdades socioespaciais.  
+
+A investigação se vale de uma série de bases de dados de órgãos oficiais e instituições acadêmicas. Entre elas, sobremaneira, a **Base de Dados das Linhas de Ônibus da Cidade de São Paulo**, compilada pelo Centro de Estudos da Metrópole e divulgada recentemente.  
+
+Este relatório apresenta a análise exploratória desta base, detalhando os passos e códigos e usados. Como usaremos o `ggplot()` para visualizar os dados, antes de plotar os dados é preciso convertê-lo para formato tidy, antes de partir para a análise vamos computar todas as variáveis. Por isto a a análise se divide em:
+
+1. Preparar o ambiente, importar e visualizar metadados do dataset
+2. Manipular, computar novas variáveis
+3. Criar visualizações dos dados
+
+# Preparando o ambiente  
+Antes de mais nada, é preciso carregar os pacotes que serão utilizados
+```{r setwd, message=FALSE}
+library(rgdal)
+library(lubridate)
+library(broom)
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(ggthemes)
+library(prettydoc)
+```
+
+# 1. Importar e visualizar metadados  
+Depois de carregar os pacotes, a primeira coisa é importar os dados. A base do CEM está disponibilizada em formato .shp, contendo dados geográficos (o traçado das linhas, logradouros, setores censitários) e atributos não geográficos (variáveis sobre as linhas de ônibus).  
+
+Para importar o *dataset* será usada a função `readOGR()` do pacote `rgdal`, que importa dados espaciais para o R, conforme a seguir:  
+
+## 1.1 Importar dataset ##  
+```{r import_dataset, cache=TRUE}
+# Carregar a base de dados do CEM
+arq <- '~/Documentos/00-Projetos-Dados/R-Projetos/desig_acesso_transp/data/'
+linhas <- readOGR(dsn=path.expand(arq),
+                  layer='LB15_LI_MSP_CEM_V1',
+                  encoding = 'Windows-1254')
+```
+Se tudo der certo, este será o output que você verá, no qual é possível conferir a informação de que a tabela de dados tem 49 colunas com variáveis sobre 2349 observações.  
+
+## 1.2 Verificar consistência dos dados ##  
+Agora que a base foi importada, é possível começar a explorá-la. O primeiro passo é verificar se a importação ocorreu corretamente. Um modo de saber se todas as variáveis foram importadas e qual a classe de dados de cada uma é com a função `glimpse()`, do pacote `dplyr`.  
+
+```{r glimpse_linhas, message=FALSE, results='hide'}
+# Ver metadados e classes das variáveis
+glimpse(linhas) # não imprimir
+```
+  
+### 1.2.1 Visualizar o CRS ###  
+
+Além disso, em se tratado de dados espaciais, é importante saber também qual o sistema de coordenadas de referências (CRS) da base de dados. Isto pode ser feito consultando o slot de informações CRS.  
+
+```{r crs_linhas}
+# Consultar o CRS
+linhas@proj4string
+```
+
+Interessa também verificar os atributos não geográficos que acompanhar os dados espaciais. Para isso um bom começo é ver os nomes das colunas com `names()` (embora `glimpse()` já tenha mostrado), o começo da tabela com `head()` e o fim com `tail()`.  
+
+A variável **linhas** é composta de *slots* que contém os atributos espaciais e não espaciais. Estes podem ser acessados no *slot* `linhas@data`. Nem sempre é preciso usar, mas aqui será usado por padrão.  
+
+### 1.2.2 Visualizar os nomes das variáveis ###  
+```{r names_linhas}
+# Ver nomes das colunas
+names(linhas@data)
+```
+
+### 1.2.3 Visualizar o começo e o fim da tabela de atributos não geográficos  
+```{r head_linhas}
+# Ver as primeiras linhas da tabela de atributos
+head(linhas@data, 3)
+```
+  
+```{r tail_linhas}
+# Ver as últimas linhas da tabela de atributos
+tail(linhas@data, 3)
+```
+  
+
+# 2. Preparação dos dados para análise  
+
+Com estas informações sobre os dados, já temos alguma noção da estrutura da base de dados e foi possível corrigir alguns problemas, como a codificação para "Windows-1254", para que as strings não sejam distorcidas.  
+
+Porém, é preciso manipular os dados para calcular informações que permitam aprofundar o entendimento sobre os dados. Principalmente para a análise isolada das variáveis quantitativas, vamos computar intervalos a fim de visualizar sua distribuição.  
+
+## 2.1 Idade das linhas de ônibus  
+Conforme vimos acima, a variável DATA_CRIA apresenta o ano em que cada linha de ônibus foi criada. Com este dado podemos verificar a criação de linhas por ano, mas nos interessa saber também as idades das linhas de ônibus. Isso é possível de ser calculado com a função `lubridate`.  
+
+```{r lubridate_ano}
+# Criar variável com formato data
+linhas$ano <- as.Date(as.character(linhas$DATA_CRIA, 'year'), '%Y')
+# Converter para o primeiro dia do ano
+linhas$ano <- floor_date(linhas$ano, "year")
+# Visualizar primeiras observações da nova variável
+head(linhas$ano)
+# Criar intervalo de datas
+linhas$idade = interval(ymd(linhas$ano), today(tzone =""))
+# Calcular idades em anos
+linhas$idade <- as.integer(time_length(as.duration(linhas$idade), "year"))
+```
+
+Embora ter a idade ajude, para visualizar a distribuição computando frequências, é mais adequado dividir em intervalos de idade. Para isso, primeiro vamos ver a distribuição das idades, com summary.  
+
+```{r range_idade}
+# Ver limites da idade
+range(linhas@data$idade, na.rm=TRUE)
+```
+
+Agora que já sabemos os limites mínimo e máximo, vamos dividir as idades em intervalos.
+
+```{r criar_int_idade}
+# Criar variável com intervalos e rótulos
+linhas$idade_int <- cut(linhas$idade,
+                        breaks=c(0,9,14,20,29,40),
+                        labels=c("0-9","9-14","14-19","20-29","30-40"))
+# Ver descritivo, para conferir
+summary(linhas$idade_int)
+```
+
+## 2.2 Tamanho e composição da Frota  
+
+Além das idades, com a base de dados é possível caracterizar as frotas de cada uma das linhas. Por hora, vamos preparar para analisar o quadro geral posteriormente.  
+
+Agora vamos olhar os intervalos, da mesma forma como fizemos com as idades.  
+
+```{r RANGE_FROTA}
+# Ver limites da idade
+range(linhas@data$FROTA, na.rm=TRUE)
+```
+
+```{r criar_int_FROTA}
+# Criar variável com intervalos e rótulos
+linhas$FROTA_INT <- cut(linhas$FROTA,
+                        breaks=c(0,10,20,30,38,55),
+                        labels=c("0-10","11-20","21-30","31-38","38-55"))
+table(is.na(linhas$FROTA_INT))
+```
+  
+Algumas frotas não têm determinados tipos de ônibus. Nestes casos, o valor é 0. Conforme se verifica com o descritivo, por algum motivo os valores 0 foram convertidos para NA. Para corrigir isto, vamos transformar os NAs da nova variável criada no `level()` "0-10".    
+```{r criar_int_FROTA_ok}
+# Corrigir falha, incorporando NAs em "0-10"
+linhas$FROTA_INT[is.na(linhas$FROTA_INT)] <- "0-10"
+```
+  
+A frota é composta por tipos diferentes de ônibus e, no caso, por até 4 tipos diferentes de frotas compostas por tipos diferentes de ônibus. Nem todos têm mais de uma frota, então por hora nos restringiremos apenas ao primeiro tipo de frota que opera na linha.  
+
+```{r criar_frota_tipo}
+frota_tipo <- as.data.frame(aggregate(linhas$QTD_FROT1,
+                                      by=list(cat=linhas$TP_FROT1),
+                                      FUN=sum))
+```
+  
+## 2.3 Cobertura e tamanho das linhas  
+
+Além da idade e das frotas, a base de dados contém informações também sobre a distância das linhas e o número de trechos de logradouros cobertos por cada linha. Estas informações, posteriormente, poderão ser úteis para analisar a cobertura da rede de linhas de ônibus.  
+
+Primeiramente, vamos ver os intervalos de distância das linhas.  
+
+### Distâncias das linhas
+
+```{r range_distância}
+# Ver limites da idade
+range(linhas@data$DISTANCIA, na.rm=TRUE)
+```
+
+```{r criar_int_distancia}
+linhas$DIST_INT <- factor(cut(linhas$DISTANCIA,
+                             breaks=c(0, 6000, 12000, 20000, 30000, 40000, 55828),
+                             labels=c('0-6000', '6000-12000',
+                                      '12000-20000', '20000-30000',
+                                      '30000-40000', '40000-55828')))
+summary(linhas$DIST_INT)
+```
+  
+### Quantidade de trechos de logradouros.
+
+```{r range_TRECH_LOG}
+range(linhas$TRECH_LOG, na.rm=TRUE) # visualizar descritivo das distâncias
+```
+
+```{r criar_int_trecho_log}
+linhas$TRECH_LOG_INT <- factor(cut(linhas$TRECH_LOG,
+                             breaks=c(5, 50, 100, 200, 300, 548),
+                             labels=c('5-50', '50-100',
+                                      '100-200', '200-300',
+                                      '300-548')))
+summary(linhas$TRECH_LOG_INT)
+```
+
+## 2.4 Período de atendimento  
+### Primeira Viagem
+```{r time_PRI_VIAG}
+linhas@data$PRI_VIAG_HORA <- hm(linhas$PRI_VIAG)
+head(linhas$PRI_VIAG_HORA)
+```
+
+### Última Viagem
+```{r time_ULT_VIAGEM}
+linhas@data$ULT_VIAG_HORA <- hm(linhas$ULT_VIAG)
+head(linhas$ULT_VIAG_HORA)
+```
+
+### Total de partidas diária
+```{r range_TOT_PART}
+range(linhas$TOT_PART)
+```
+
+```{r criar_int_TOT_PART, fig.height=4, fig.width=8}
+linhas$TOT_PART_INT <- factor(cut(linhas$TOT_PART,
+                             breaks=c(0, 20, 50, 80, 120, 396),
+                             labels=c('0-20', '20-50',
+                                      '50-80', '80-120',
+                                      '120-396')))
+summary(linhas$TRECH_LOG_INT)
+```
+
+## 2.5 Média de utilização das linhas  
+#### Nos dias úteis  
+
+```{r range_MED_UTIL}
+range(linhas$MED_UTIL)
+```
+
+```{r criar_int_MED_UTIL}
+linhas$MED_UTIL_INT <- factor(cut(linhas$MED_UTIL,
+                                 breaks=c(0, 1567, 6791, 11260, 60850),
+                                 labels=c('0-1567',
+                                          '1567-6791',
+                                          '6791-11260',
+                                          '11260-60850')))
+```
+
+#### Aos sábados  
+```{r range_MED_SAB}
+range(linhas$MED_SAB)
+```
+
+```{r criar_int_MED_SAB}
+linhas$MED_SAB_INT <- factor(cut(linhas$MED_SAB,
+                                 breaks=c(0, 500, 2000, 5000, 10000,33285),
+                                 labels=c('0-500',
+                                          '500-2000',
+                                          '2000-5000',
+                                          '5000-1000',
+                                          '10000-33285')))
+```
+  
+## 2.6 Limpar e transformar em tidy dataset
+Agora que já computamos e criamos variáveis de interesse, vamos limpar o dataset para manter apenas os atributos que serão efetivamente usados nas análise que serão feitas a seguir.
+
+Sem esta limpeza, a transformação da base de dados para um formato tidy gerará uma base muito pesada, com cerca de 1milhão de observações. Por isto o objetivo desta limpeza é deixar a base de dados mais leve, a fim de consumir menos RAM e acelerar as análises.
+
+Em computadores com alta capacidade de processamente, isto pode não ser necessário, mas num I3 com 4gb de RAM, isto pode evitar alguns travamentos da máquina.
+
+#### Excluir atributos  
+
+```{r clean_dataset}
+names(linhas)
+linhas@data <- select(linhas@data, -DATA_CRIA, -(EMPRESA1:EMPRESA2), -(TP_FROT2:QTD_FROT4), -(PASS_DIN:TOTAL_PASS), -MS_REF)
+```
+
+#### Tidy dataset  
+
+```{r tidy_broom, cache=TRUE}
+linhas$id <- row.names(linhas)
+linhas.f <- tidy(linhas)
+linhas.f <- merge(linhas.f, linhas, by.x='id', by.y='id')
+```
+
+Para conferir, vamos olhar as primeiras linhas do novo *dataset* `linhas.f`.
+
+```{r head_linhas.f}
+head(linhas.f)
+```
+
+# 3. Análise e cruzamento
+## 3.1 Idade das Linhas
+
+Primeiro vamos visualizar a distribuição das idades:
+
+```{r boxplot_idade, warning=FALSE}
+boxplot.idade <- ggplot(data=linhas.f %>% distinct(CODIGO, idade), aes(x="",y=idade)) +
+  geom_boxplot(fill="#fcbba1") + scale_y_continuous(breaks=seq(0, 40, 5)) +
+  labs(title="Boxplot de idade", x=NULL, y="Idade da linha") + theme_hc()
+```
+
+```{r hist_idade}
+# Guardar histogram
+hist.idade <- ggplot(distinct(linhas.f, CODIGO, idade), aes(idade)) +
+  geom_histogram(breaks=seq(0, 40, by = 2), col="black", fill="#fc9272") +
+  scale_y_continuous(breaks=seq(0, 300, 50)) +
+  labs(title="Histograma da idade", x="Idade", y=NULL) + theme_hc()
+```
+
+```{r plot_box_hist_idade, warning=FALSE}
+# Plotar gráficos
+grid.arrange(boxplot.idade, hist.idade, ncol=2)
+```
+
+Agora vamos ver o gráfico dos intervalos de idade, que computamos anteriormente e em que década as linhas foram criadas?
+
+### Faixa etária das linhas de ônibus
+
+
+```{r boxplot_idade_int, warning=FALSE, error=FALSE}
+# Boxplot de faixas etárias
+boxplot.idade_int <- ggplot(data=linhas.f %>% distinct(CODIGO, idade, idade_int), aes(x=idade_int ,y=idade)) +
+  geom_boxplot(fill="#fcbba1", notch = FALSE) +
+  scale_y_continuous(breaks=seq(0, 40, 5)) +
+  labs(title="Boxplot de Faixas Etárias", x="Faixa etária", y="Idade da linha") + theme_hc()
+```
+
+```{r barplot_idade_int}
+# Barplot de faixas etárias
+barplot.idade_int <- ggplot(data.frame(prop.table(table(linhas.f$idade_int))), aes(x=Var1, y=Freq*100), fill=Var1) +
+  geom_bar(stat="identity", fill="#fc9272") +
+  labs(title="Idade das linhas de ônibus municipais",
+       subtitle="Em porcentagem", x="Faixa etária", y=NULL) + theme_hc()
+```
+
+```{r plot_box_bar_idade_int, warning = FALSE}
+# Plotar lado a lado
+grid.arrange(boxplot.idade_int, barplot.idade_int, ncol= 2)
+```
+
+### Quando elas foram criadas?
+
+```{r barplot_decada}
+# Barplot
+ggplot(data.frame(prop.table(table(linhas.f$DECADA))), aes(x=Var1, y=Freq*100), fill=Var1) +
+  geom_bar(stat="identity", fill="#fc9272") +
+  labs(title="Criação de linhas de ônibus, por década",
+       subtitle="Em porcentagem", x="Décadas", y=NULL) +
+  theme_hc()
+```
+
+## 3.2 Frota municipal de ônibus 
+
+A frota diz respeito à quantidade de ônibus disponíveis e operando no serviço de transporte público.
+
+* Quantos veículos compôem a frota municipal de ônibus?
+* Como esta frota é distribuída entre as linhas?
+* Como a frota está distribuída nas regiões?
+
+### 3.2.1 Frota por linha
+
+A primeira coisa que queremos saber é quantos ônibus no total atendem o serviço de transporte no município de São Paulo.
+
+#### Somar a frota
+
+```{r sum_frota}
+sum_frota <- linhas.f %>% distinct(CODIGO, FROTA)
+sum(sum_frota$FROTA)
+```
+
+Já sabemos que a frota total de ônibus municipais é composta por 15.665 veículos. Vamos olhar agora como estes ônibus estão distribuídos entre as linhas.  
+
+#### Analisar distribuição da frota  
+
+Primeiro podemos olhar os quartis:
+
+```{r summary_FROTA}
+summary(linhas.f$FROTA)
+```
+
+Conforme indica o resultado de `summary()`, 75% das linhas de ônibus são compostas por um frota de até 18 ônibus. Este valor, porém, não diferencia os *outliers*, podendo distorcer os resultados das análise.  
+
+Para confirmar, vamos verificar se há *outliers* na variável:  
+
+```{r}
+range(boxplot.stats(linhas.f$FROTA)$out)
+```
+
+Estatisticamente, frotas compostas por 38 ônibus em diante são consideradas *outliers*. Para visualizar melhor esta distribuição, vamos plotar um boxplot e um histogram:  
+
+##### Boxplot da frota
+```{r boxplot_FROTA}
+
+# Guardar boxplot
+boxplot.FROTA <- ggplot(data=linhas.f %>% distinct(CODIGO, FROTA),
+                        aes(x="",y=FROTA)) +
+  geom_boxplot(fill="#fcbba1") +
+  scale_y_continuous(breaks=seq(0, 55, 5)) +
+  labs(title="Boxplot de FROTA", x=NULL, y="Frota por linha") +
+  theme_hc()
+```
+
+##### Histograma da frota
+```{r hist_FROTA, results="hide"}
+dependson = -1
+# Guardar histogram
+hist.FROTA <- ggplot(data=linhas.f %>% distinct(CODIGO, FROTA), aes(FROTA)) +
+  geom_histogram(breaks=seq(0, 55, by = 3), col="black", fill="#fc9272") +
+  scale_y_continuous(breaks=seq(0, 300, 50)) +
+  scale_x_continuous(breaks=seq(0,55,5)) +
+  labs(title="Histograma da FROTA", x="Frota por linha", y=NULL) +
+  theme_hc()
+```
+
+##### Plotar os gráficos
+```{r plot_box_hist_FROTA}
+dependson = c(-1,-2)
+# Plotar gráficos
+grid.arrange(boxplot.FROTA, hist.FROTA, ncol=2)
+```
+
+```{r print_arrange_frota_tipo}
+print(arrange(frota_tipo, -x))
+```
+
+```{r plot_bar_FROTA, fig.width=8, fig.height=4}
+dependson = -1
+ggplot(frota_tipo, aes(x=reorder(cat, x), y=x), fill=cat) +
+  geom_bar(stat="identity", fill="#fc9272") +
+  labs(title="Tipo de frota das linhas",
+       subtitle="Primeiras frotas, para o total de linhas município") +
+  theme_hc() + coord_flip()
+```
+
+Com o boxplot, podemos ver que o terceiro quartil cai para 16 ônibus.
+
+
+## 3.3 Cobertura
+
+FROTA POR REGIÃO
+
+
+
+
+
+
+```{r summary_distancia}
+summary(linhas$DISTANCIA) # visualizar descritivo das distâncias
+```
+
+```{r summary_TOT_PART}
+summary(linhas$TOT_PART)
+```
+
+```{r summary_MED_UTIL}
+summary(linhas$MED_UTIL) # visulizar descritivo da média de passageiros
+```
+
+```{r summary_MED_SAB}
+summary(linhas$MED_SAB) # visulizar descritivo da média de passageiros
+```
